@@ -185,6 +185,9 @@ select.psel{border:1px solid var(--line2); background:var(--raised); border-radi
 .chip.c-상시{color:var(--c-always); background:var(--c-always-bg)} .chip.c-제안{color:var(--c-prop); background:var(--c-prop-bg)}
 .chip.c-운영{color:var(--c-ops); background:var(--c-ops-bg)} .chip.c-기타{color:var(--c-etc); background:var(--c-etc-bg)}
 
+/* ── 날짜 선택(브라우저 달력) ── */
+#quickdate{position:fixed; opacity:0; pointer-events:none; border:0; padding:0; margin:0; z-index:-1}
+
 /* ── 팝오버 / 모달 / 토스트 ── */
 .pop{position:absolute; z-index:40; padding:14px; width:280px; box-shadow:var(--sh-high)}
 .pop label{display:block; font-size:12.5px; font-weight:700; color:var(--text2); margin-bottom:10px}
@@ -342,14 +345,7 @@ select.psel{border:1px solid var(--line2); background:var(--raised); border-radi
 <datalist id="dl-projects"></datalist>
 <datalist id="dl-cats"><option value="상시"><option value="제안/협의"><option value="운영/관리"><option value="기타"></datalist>
 
-<div id="datepop" class="pop pbox" hidden>
-  <label>시작일 <span>(기간 작업일 때만)</span><input type="date" id="dp-start"></label>
-  <label>마감일 (Deadline)<input type="date" id="dp-due"></label>
-  <div class="btns">
-    <button class="pbtn small" id="dp-clear" type="button">지우기</button>
-    <button class="pbtn small primary" id="dp-ok" type="button">확인</button>
-  </div>
-</div>
+<input type="date" id="quickdate" tabindex="-1" aria-hidden="true">
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>

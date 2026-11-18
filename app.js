@@ -235,7 +235,7 @@
       const cls = n < 0 ? 'over' : n === 0 ? 'today' : n <= 3 ? 'soon' : '';
       chip = `<span class="dd ${cls}">${C.ddayLabel(n)}</span>`;
     }
-    return `<button class="datebtn" data-act="date" title="날짜 선택">${txt ? `<span class="dtxt">${esc(txt)}</span>` : '<span class="dtxt ph">날짜</span>'}${chip}</button>`;
+    return `<button class="datebtn" data-act="date" title="클릭하면 달력이 열려요 (기간은 ⋯ 상세에서)">${txt ? `<span class="dtxt">${esc(txt)}</span>` : '<span class="dtxt ph">날짜</span>'}${chip}</button>`;
   }
 
   function taskHTML(t, nums) {
@@ -486,7 +486,7 @@
     const row = b.closest('.row'); const kind = row?.dataset.kind, id = row?.dataset.id;
     switch (b.dataset.act) {
       case 'toggle': return kind === 'task' ? toggleTask(id, b) : toggleSub(id, b);
-      case 'date': return openDatePop(kind, id, b);
+      case 'date': return openDatePicker(kind, id, b);
       case 'subs': {
         const tid = id;
         if (!subsOf(tid).length) return addSub(tid);
@@ -500,36 +500,29 @@
   const saveExpanded = () => LS.set('todo.expanded', [...S.expanded]);
 
   /* =================== 날짜 팝오버 =================== */
+  /* 날짜 셀 클릭 → 브라우저 달력이 바로 열리고, 날짜를 고르는 즉시 마감일로 저장
+     (기간 시작일은 ⋯ 상세 편집에서 설정. 달력의 '삭제'를 누르면 날짜 지움) */
   let dpCtx = null;
-  function openDatePop(kind, id, btn) {
+  function openDatePicker(kind, id, btn) {
     const obj = kind === 'task' ? taskById(id) : subById(id); if (!obj) return;
-    dpCtx = { kind, id, btn };
-    const pop = $('#datepop');
-    $('#dp-start').value = obj.start_date || '';
-    $('#dp-due').value = obj.due_date || '';
-    pop.hidden = false;
+    const inp = $('#quickdate');
     const r = btn.getBoundingClientRect();
-    const left = Math.min(r.left + window.scrollX, window.scrollX + document.documentElement.clientWidth - pop.offsetWidth - 8);
-    pop.style.left = `${Math.max(8, left)}px`;
-    pop.style.top = `${r.bottom + window.scrollY + 4}px`;
-    $('#dp-due').focus();
+    Object.assign(inp.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+    dpCtx = { kind, id };
+    inp.value = obj.due_date || '';
+    try { inp.showPicker(); } catch { inp.focus(); inp.click(); }
   }
-  function closeDatePop(refocus = true) {
-    const pop = $('#datepop'); if (pop.hidden) return;
-    pop.hidden = true;
-    if (refocus && dpCtx) $(`.row[data-kind="${dpCtx.kind}"][data-id="${dpCtx.id}"] .datebtn`)?.focus();
-    dpCtx = null;
-  }
-  async function saveDatePop(clear) {
+  async function onQuickDateChange() {
     if (!dpCtx) return;
-    let s = clear ? null : ($('#dp-start').value || null), d = clear ? null : ($('#dp-due').value || null);
-    if (s && !d) d = s;
-    if (s && d && s > d) [s, d] = [d, s];
-    if (s === d) s = null;
     const { kind, id } = dpCtx;
-    closeDatePop();
-    await patch(kind, id, { start_date: s, due_date: d });
-    render(); idleTalk();
+    const obj = kind === 'task' ? taskById(id) : subById(id); if (!obj) return;
+    const due = $('#quickdate').value || null;
+    if (due === (obj.due_date || null)) return;
+    let start = obj.start_date || null;
+    if (!due || (start && start >= due)) start = null;     // 기간이 뒤집히거나 날짜를 지우면 시작일도 해제
+    await patch(kind, id, { start_date: start, due_date: due });
+    render();
+    $(`.row[data-kind="${kind}"][data-id="${id}"] .datebtn`)?.focus();
   }
 
   /* =================== 상세 편집 (⋯ / 모바일) =================== */
@@ -705,16 +698,7 @@
     $('#btn-help').onclick = openHelp;
     $('#btn-logout').onclick = async () => { flushDeletes(); await sb.auth.signOut(); location.reload(); };
 
-    $('#dp-ok').onclick = () => saveDatePop(false);
-    $('#dp-clear').onclick = () => saveDatePop(true);
-    $('#datepop').addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); saveDatePop(false); }
-      if (e.key === 'Escape') { e.preventDefault(); closeDatePop(); }
-    });
-    document.addEventListener('mousedown', e => {
-      const pop = $('#datepop');
-      if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('.datebtn')) closeDatePop(false);
-    });
+    $('#quickdate').addEventListener('change', onQuickDateChange);
 
     document.addEventListener('keydown', e => {
       if (e.isComposing) return;
