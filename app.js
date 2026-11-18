@@ -28,58 +28,10 @@
   };
   const pending = new Map();   // 삭제 대기(되돌리기용)
 
-  /* =================== 픽셀 마스코트 =================== */
-  const BEAR = [
-    '...##......##...', '..#oo#....#oo#..', '..#oo######oo#..', '..#bbbbbbbbbb#..', '.#bbbbbbbbbbbb#.',
-    '.#bbebbbbbbebb#.', '.#bbebbbbbbebb#.', '.#pbbbbnnbbbbp#.', '.#bbbbbmmbbbbb#.', '..#bbbbbbbbbb#..',
-    '...##########...', '..#bbwwwwwwbb#..', '.#bbbwwwwwwbbb#.', '.#bbbwwwwwwbbb#.', '..##bb####bb##..',
-  ];
-  const PAL = { '#': '#f2eeff', o: '#ff9ec4', b: '#d9a066', e: '#1a1424', p: '#ff7eb6', n: '#1a1424', m: '#7a3f1f', w: '#fff1d6' };
-  function drawPixels(svg, map, blink) {
-    let r = '';
-    map.forEach((row, y) => [...row].forEach((ch, x) => {
-      let c = ch;
-      if (blink && ch === 'e') c = y === 6 ? 'e' : 'b';
-      if (PAL[c]) r += `<rect x="${x}" y="${y}" width="1.02" height="1.02" fill="${PAL[c]}"/>`;
-    }));
-    svg.setAttribute('viewBox', `0 0 ${map[0].length} ${map.length}`);
-    svg.setAttribute('shape-rendering', 'crispEdges');
-    svg.innerHTML = r;
-  }
-  const mascot = () => $('#mascot');
-  function initMascot() {
-    drawPixels($('#mascot'), BEAR); drawPixels($('#mascot-login'), BEAR);
-    setInterval(() => { const m = mascot(); drawPixels(m, BEAR, true); setTimeout(() => drawPixels(m, BEAR), 160); }, 3800);
-  }
-  const CHEERS = ['나이스! 완료 도장 쾅 🐾', '한 건 클리어! +10XP', '오늘도 착착 진행 중 ✨', '꿀 같은 완료 🍯', '이 속도면 칼퇴각!', '완료! 다음 거 가볼까요?'];
-  let bubbleTimer = null;
-  function say(text, ms = 0) {
-    $('#bubble').textContent = text;
-    clearTimeout(bubbleTimer);
-    if (ms) bubbleTimer = setTimeout(idleTalk, ms);
-  }
-  function cheer() {
-    const m = mascot(); m.classList.remove('happy'); void m.offsetWidth; m.classList.add('happy');
-    say(CHEERS[Math.floor(Math.random() * CHEERS.length)], 4000);
-  }
-  function idleTalk() {
-    const t = today(), act = S.tasks.filter(x => !x.done);
-    const over = act.filter(x => C.isOverdue(x, t)).length + S.subs.filter(s => C.isOverdue(s, t) && !taskById(s.task_id)?.done).length;
-    const due = act.filter(x => x.due_date === t).length;
-    if (over) return say(`노란 줄 ${over}개! 지연된 것부터 같이 치워요`);
-    if (due) return say(`오늘 마감 ${due}건, 하나씩 깨부숴요!`);
-    if (!act.length) return say('할 일 0개! 오늘은 여유롭게 ☕');
-    say(['오늘도 차곡차곡 가봐요 💪', '천천히, 그래도 꾸준히!', '체크하는 맛이 최고죠', '좋은 하루! 뭐부터 할까요?'][new Date().getDate() % 4]);
-  }
-  function burst(el) {
-    const r = el.getBoundingClientRect(), cols = ['#ff7eb6', '#4fe8b8', '#6cc5ff', '#ffd84a', '#a58fff'];
-    for (let i = 0; i < 10; i++) {
-      const b = document.createElement('i'); b.className = 'burst';
-      const a = (Math.PI * 2 * i) / 10;
-      b.style.cssText = `left:${r.left + r.width / 2}px;top:${r.top + r.height / 2}px;background:${cols[i % 5]};color:${cols[i % 5]};--dx:${Math.cos(a) * 34}px;--dy:${Math.sin(a) * 34}px`;
-      document.body.appendChild(b); setTimeout(() => b.remove(), 700);
-    }
-  }
+  /* 완료 피드백: 업무용 톤에 맞춰 시각 효과 없이 토스트만 사용 */
+  const cheer = () => {};
+  const burst = () => {};
+  const idleTalk = () => {};
 
   /* =================== 토스트 / 모달 =================== */
   let toastTimer = null;
@@ -401,7 +353,7 @@
       && (S.showRoutineDone || !t.routine_id)
       && (!S.project || t.project === S.project) && textMatch(t))
       .sort((a, b) => b.completed_at.localeCompare(a.completed_at));
-    if (!list.length) { $('#done-view').innerHTML = `<div class="pbox empty">${q ? '검색 결과가 없어요' : '아직 완료한 작업이 없어요. 첫 체크를 기다리는 중! 🐾'}</div>`; return; }
+    if (!list.length) { $('#done-view').innerHTML = `<div class="pbox empty">${q ? '검색 결과가 없어요' : '아직 완료한 작업이 없어요'}</div>`; return; }
     const groups = new Map();
     for (const t of list) {
       const w = C.weekInfo(new Date(t.completed_at));
@@ -410,7 +362,7 @@
     }
     let h = '';
     for (const { w, items } of groups.values()) {
-      h += `<div class="weekblk pbox"><div class="weekhead">✔ ${w.month}월 ${w.week}주차 <span class="r">${C.mmdd(w.monYmd)} ~ ${C.mmdd(w.sunYmd)}</span><span class="n">${items.length}건</span></div>`;
+      h += `<div class="weekblk pbox"><div class="weekhead">${w.month}월 ${w.week}주차 <span class="r">${C.mmdd(w.monYmd)} ~ ${C.mmdd(w.sunYmd)}</span><span class="n">${items.length}건</span></div>`;
       for (const t of items) {
         const subs = subsOf(t.id);
         h += `<div class="drow" data-id="${t.id}">
@@ -418,7 +370,7 @@
           <input type="date" data-act="cdate" value="${C.tsYmd(t.completed_at)}" title="완료일 수정">
           <span class="dcat"><span class="chip c-${catKey(t.category)}">${esc(t.category)}</span></span>
           <span class="dproj" title="${esc(t.project)}">${esc(t.project)}</span>
-          <span class="t" title="${esc(t.title)}">${esc(t.title)} <span style="color:var(--fg2);font-weight:400">${esc(C.rangeText(t.start_date, t.due_date))}</span></span>
+          <span class="t" title="${esc(t.title)}">${esc(t.title)} <span style="color:var(--text3);font-weight:400">${esc(C.rangeText(t.start_date, t.due_date))}</span></span>
           <button class="xbtn" data-act="deldone" title="삭제">✕</button>
         </div>`;
         subs.forEach((s, i) => { h += `<div class="dsub${s.done ? ' ok' : ''}"><span title="${esc(s.title)}">${C.roman(i + 1)}. ${esc(s.title)}${s.done ? ' ✓' : ''}</span></div>`; });
@@ -434,15 +386,13 @@
     const over = act.filter(t => C.isOverdue(t, td)).length + S.subs.filter(s => C.isOverdue(s, td) && taskById(s.task_id) && !taskById(s.task_id).done).length;
     const due = act.filter(t => t.due_date === td).length;
     const ws = C.weekStats(S.tasks, S.subs, now), st = C.streak(S.tasks, S.subs, now);
-    const lv = Math.floor(ws.xp / 100) + 1, inLv = ws.xp % 100, filled = Math.round(inLv / 10);
-    const bars = Array.from({ length: 10 }, (_, i) => `<i class="${i < filled ? `f${i >= 7 ? ' g' : ''}` : ''}"></i>`).join('');
     $('#stats').innerHTML = `
-      <span class="stat">오늘 마감 <b>${due}</b></span>
-      <span class="stat${over ? ' warn' : ''}">지연 <b>${over}</b></span>
-      <span class="stat">이번 주 완료 <b>${ws.main}</b><small>+${ws.sub}</small></span>
-      <span class="stat fire" title="평일 연속 완료일">🔥 <b>${st}</b>일</span>
-      <span class="xp" title="이번 주 XP (메인 10 · 하위 3)">Lv.${lv} <span class="xpbar">${bars}</span> ${ws.xp}XP</span>`;
-    $('#weeklabel').textContent = `${C.weekLabel(now)} · ${C.mmdd(td)}`;
+      <div class="stat${due ? ' accent' : ''}"><span class="k">오늘 마감</span><b>${due}</b><span class="u">건</span></div>
+      <div class="stat${over ? ' warn' : ''}"><span class="k">지연</span><b>${over}</b><span class="u">건</span></div>
+      <div class="stat"><span class="k">이번 주 완료</span><b>${ws.main}</b><span class="u">건<span class="x"> · 하위 ${ws.sub}</span></span></div>
+      <div class="stat" title="평일 기준 연속으로 완료 기록이 있는 날"><span class="k">연속 완료</span><b>${st}</b><span class="u">일</span></div>`;
+    const W = '일월화수목금토';
+    $('#weeklabel').textContent = `${C.weekLabel(now)} · ${now.getMonth() + 1}월 ${now.getDate()}일 (${W[now.getDay()]})`;
   }
 
   function renderDatalists() {
@@ -591,9 +541,9 @@
       <label>작업</label><input id="d-title" value="${esc(t.title)}">
       <label>날짜</label><div class="two"><input type="date" id="d-start" value="${t.start_date || ''}" title="시작(기간일 때만)"><input type="date" id="d-due" value="${t.due_date || ''}" title="마감"></div>
       <label>비고</label><input id="d-note" value="${esc(t.note)}">
-      <label>업무보고</label><label style="font-family:var(--body)"><input type="checkbox" id="d-report" style="width:auto;height:auto"${t.report_include ? ' checked' : ''}> 보고서에 포함</label>
+      <label>업무보고</label><label style="font-weight:400"><input type="checkbox" id="d-report" style="width:auto;height:auto"${t.report_include ? ' checked' : ''}> 보고서에 포함</label>
     </div>`;
-    const foot = `<button class="pbtn" id="d-del">🗑 삭제</button><span class="note">날짜 2개 = 기간(시작~마감)</span><button class="pbtn primary" id="d-save">저장</button>`;
+    const foot = `<button class="pbtn danger" id="d-del">삭제</button><span class="note">날짜 2개 = 기간(시작~마감)</span><button class="pbtn primary" id="d-save">저장</button>`;
     const d = openModal('작업 상세', body, foot);
     $('#d-title', d).focus();
     $('#d-del', d).onclick = () => { closeModal(); deleteLater('task', id); };
@@ -615,19 +565,19 @@
     const now = new Date(), w = C.weekInfo(now);
     const txt = C.buildReport(S.tasks, S.subs, now);
     const nextSun = C.ymd(C.addDays(w.sun, 7));
-    const d = openModal('📋 주간 업무보고', `<textarea id="rep" spellcheck="false">${esc(txt)}</textarea>`,
+    const d = openModal('주간 업무보고', `<textarea id="rep" spellcheck="false">${esc(txt)}</textarea>`,
       `<span class="note">금주 = ${C.mmdd(w.monYmd)}~${C.mmdd(w.sunYmd)} 완료분 · 차주 = ~${C.mmdd(nextSun)} 마감 미완료분 · 루틴 제외</span>
        <button class="pbtn primary" id="rep-copy">복사하기</button>`);
     $('#rep-copy', d).onclick = async () => {
       const v = $('#rep', d).value;
       try { await navigator.clipboard.writeText(v); } catch { $('#rep', d).select(); document.execCommand('copy'); }
-      toast('업무보고를 복사했어요 ✔'); cheer();
+      toast('업무보고를 클립보드에 복사했어요'); cheer();
     };
   }
 
   /* =================== 일괄 붙여넣기 =================== */
   function openBulk() {
-    const body = `<p class="pixel" style="font-size:11px;margin:0 0 8px;color:var(--fg2)">
+    const body = `<p class="muted" style="margin:0 0 10px">
       한 줄 = 메인 작업 · 들여쓰기 / i. / • 로 시작 = 바로 위 작업의 하위작업 · @11/20, (11/09-12) 날짜 인식</p>
       <textarea id="bk-text" style="min-height:200px" placeholder="- 볼보그룹 OPS IW 교육운영 준비 @12/10
    i. 교육 운영 물품 구매 @11/21
@@ -638,7 +588,7 @@
         <label>기본 업무구분</label><select id="bk-cat">${C.CATS.map(c => `<option${c === S.lastCat ? ' selected' : ''}>${c}</option>`).join('')}</select>
       </div>
       <div id="bk-preview" style="margin-top:14px"></div>`;
-    const d = openModal('📥 텍스트 일괄 붙여넣기', body,
+    const d = openModal('일괄 입력', body,
       `<span class="note">미리보기에서 체크 해제·수정 후 추가</span><button class="pbtn" id="bk-parse">미리보기</button><button class="pbtn primary" id="bk-add" disabled>선택 항목 추가</button>`);
     let items = [];
     $('#bk-text', d).focus();
@@ -683,8 +633,8 @@
       ['Esc', '편집 취소 / 창 닫기'], ['N', '빠른 입력으로 이동'], ['Ctrl + K  또는  /', '검색'],
       ['Alt + R', '업무보고 생성'], ['Alt + B', '일괄 붙여넣기'], ['?', '이 도움말'],
     ];
-    openModal('⌨ 단축키', `<dl class="helpgrid">${rows.map(([k, v]) => `<dt><span class="kbd">${k}</span></dt><dd style="margin:0">${v}</dd>`).join('')}</dl>
-      <p class="pixel" style="font-size:11px;color:var(--fg2);margin-top:14px">빠른 입력 토큰: @11/20 · @11/9-12 · @금 · @내일 · !운영 · #프로젝트_이름</p>`);
+    openModal('단축키', `<dl class="helpgrid">${rows.map(([k, v]) => `<dt><span class="kbd">${k}</span></dt><dd style="margin:0">${v}</dd>`).join('')}</dl>
+      <p class="muted" style="margin-top:16px">빠른 입력 토큰: @11/20 · @11/9-12 · @금 · @내일 · !운영 · #프로젝트_이름</p>`);
   }
   function backup() {
     const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), tasks: S.tasks, subtasks: S.subs }, null, 2)], { type: 'application/json' });
@@ -796,7 +746,6 @@
   async function showApp() { $('#login').hidden = true; $('#app').hidden = false; await loadAll(); }
 
   async function boot() {
-    initMascot();
     bind();
     $('#login-form').onsubmit = async e => {
       e.preventDefault();

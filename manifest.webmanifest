@@ -1,11 +1,11 @@
 {
-  "name": "PIXEL TO-DO",
+  "name": "To-do",
   "short_name": "To-do",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0a090e",
-  "theme_color": "#0a090e",
+  "background_color": "#ece5db",
+  "theme_color": "#ece5db",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
