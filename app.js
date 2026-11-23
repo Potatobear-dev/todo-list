@@ -26,7 +26,7 @@
     lastCat: LS.get('todo.lastCat', '제안/협의'),
     lastCreatedId: null, loadedAt: 0, sortables: [],
     calMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1), calSel: null,
-    evCache: new Map(), evLoading: null, evErr: '',
+    evCache: new Map(), evFail: new Map(), evLoading: null, evErr: '',
   };
   const pending = new Map();   // 삭제 대기(되돌리기용)
 
@@ -311,7 +311,7 @@
     $('#routine-toggle').style.display = S.tab === 'done' ? '' : 'none';
     $$('[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === S.view));
     renderDatalists();
-    if (S.tab === 'todo') renderTodo(); else if (S.tab === 'cal') renderCal(); else renderDone();
+    if (S.tab === 'todo') renderTodo(); else if (S.tab === 'cal') safeRenderCal(); else renderDone();
     renderStats();
     restoreFocus(fc);
   }
@@ -416,19 +416,33 @@
 
   async function ensureEvents(from, to, force = false) {
     const key = `${from}_${to}`;
-    if (!force && S.evCache.has(key)) return;
+    if (!force && (S.evCache.has(key) || S.evFail.has(key))) return;   // 실패도 기억 → 재시도 루프 방지 (새로고침 버튼으로만 재시도)
     if (S.evLoading === key) return;
-    S.evLoading = key; S.evErr = '';
+    S.evLoading = key; S.evFail.delete(key);
     let res;
-    try { res = await sb.functions.invoke('team-calendar', { body: { from, to } }); }
-    catch (e) { res = { error: e }; }
-    S.evLoading = null;
+    const t0 = Date.now();
+    try {
+      // 25초 안에 응답이 없으면 실패로 처리 (무한 '불러오는 중' 방지)
+      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('응답 시간 초과(25초) — Supabase 함수 로그를 확인해 주세요')), 25000));
+      res = await Promise.race([sb.functions.invoke('team-calendar', { body: { from, to } }), timeout]);
+    } catch (e) { res = { error: e }; }
+    if (S.evLoading === key) S.evLoading = null;
     if (res.error) {
       let msg = res.error.message || String(res.error);
-      try { const b = await res.error.context?.json(); if (b?.error) msg = b.error; } catch { /* noop */ }
-      S.evErr = msg;
-    } else S.evCache.set(key, (res.data && res.data.events) || []);
-    if (S.tab === 'cal') renderCal();
+      try {
+        const ctx = res.error.context;
+        if (ctx && typeof ctx.text === 'function') {
+          const raw = await ctx.text();
+          try { msg = JSON.parse(raw).error || `${ctx.status} ${raw.slice(0, 160)}`; } catch { msg = `${ctx.status} ${raw.slice(0, 160)}`; }
+        }
+      } catch { /* noop */ }
+      S.evFail.set(key, msg);
+      console.error('[team-calendar]', res.error);
+    } else {
+      S.evCache.set(key, (res.data && res.data.events) || []);
+      console.info(`[team-calendar] ${((res.data && res.data.events) || []).length}건, ${Date.now() - t0}ms`);
+    }
+    if (S.tab === 'cal') safeRenderCal();
   }
 
   /* 하루에 걸리는 항목 모으기: 팀 일정 + 할 일(메인·하위, 기간이면 기간 내내) */
@@ -468,6 +482,15 @@
     return `<div class="${cls}" data-open="${it.t.id}" title="${esc(name)}"><span class="dot"></span>${esc(name)}</div>`;
   }
 
+  function safeRenderCal() {
+    try { renderCal(); }
+    catch (e) {
+      console.error('[calendar]', e);
+      S.evErr = `달력 표시 오류: ${e.message}`; S.evCache.clear();
+      try { renderCal(); } catch { /* noop */ }
+    }
+  }
+
   function renderCal() {
     const td = today();
     const m = S.calMonth, y = m.getFullYear(), mo = m.getMonth();
@@ -476,6 +499,7 @@
     const from = C.ymd(gStart), to = C.ymd(gEnd);
     ensureEvents(from, to);
     if (!S.calSel || S.calSel < from || S.calSel > to) S.calSel = (td >= from && td <= to) ? td : C.ymd(new Date(y, mo, 1));
+    const evErr = S.evErr || S.evFail.get(`${from}_${to}`) || '';
     const map = calItems(from, to);
     const mobile = window.matchMedia('(max-width:760px)').matches;
     const MAX = 4;
@@ -488,7 +512,12 @@
         const d = C.addDays(wk, i), dy = C.ymd(d), items = map[dy] || [];
         const cls = ['cday', d.getMonth() !== mo ? 'other' : '', dy === td ? 'today' : '', dy === S.calSel ? 'sel' : '', i >= 5 ? 'wkend' : ''].join(' ');
         const body = mobile
-          ? `<div class="cdots">${items.slice(0, 6).map(it => `<i class="${it.type === 'ev' ? 'ev' : 'td cat-' + catKey(it.t.category)}"></i>`).join('')}</div>`
+          ? (() => {   // 모바일: 점 대신 개수 배지 (팀 일정 / 할 일, 지연 있으면 노란색)
+              const ne = items.filter(it => it.type === 'ev').length;
+              const tds = items.filter(it => it.type !== 'ev' && !(it.type === 'task' ? it.t : it.s).done);
+              const over = tds.some(it => C.isOverdue(it.type === 'task' ? it.t : it.s, td));
+              return `<div class="ccnt">${ne ? `<b class="ev">${ne}</b>` : ''}${tds.length ? `<b class="td${over ? ' over' : ''}">${tds.length}</b>` : ''}</div>`;
+            })()
           : items.slice(0, MAX).map(it => itemLine(it, td)).join('') + (items.length > MAX ? `<div class="cmore">+${items.length - MAX}개 더보기</div>` : '');
         grid += `<div class="${cls}" data-d="${dy}"><div class="cnum">${d.getDate()}</div>${body}</div>`;
       }
@@ -502,7 +531,7 @@
       const e = it.e;
       const time = e.allDay ? '종일' : `${hhmm(new Date(e.start))} – ${hhmm(new Date(e.end))}`;
       return `<div class="arow ev"><span class="atime">${time}</span><span class="atitle">${esc(e.title)}</span><span class="aloc">${esc(e.location)}</span></div>`;
-    }).join('') : `<div class="aempty">${S.evErr ? '' : (S.evLoading ? '불러오는 중…' : '팀 일정 없음')}</div>`;
+    }).join('') : `<div class="aempty">${evErr ? '팀 일정을 불러오지 못했어요' : (S.evLoading ? '불러오는 중…' : '팀 일정 없음')}</div>`;
     const tdHTML = tds.length ? tds.map(it => {
       const o = it.type === 'task' ? it.t : it.s;
       const name = it.type === 'task' ? (it.t.title || '') : `↳ ${it.s.title || ''}`;
@@ -522,7 +551,7 @@
         <button class="pbtn small" data-cal="reload" title="팀 일정 다시 불러오기">${S.evLoading ? '불러오는 중…' : '새로고침'}</button>
         <span class="legend"><i class="ev"></i>팀 일정 <i class="td"></i>할 일 마감 <i class="ov"></i>지연</span>
       </div>
-      ${S.evErr ? `<div class="calerr">팀 일정을 불러오지 못했어요: ${esc(S.evErr)}</div>` : ''}
+      ${evErr ? `<div class="calerr">팀 일정을 불러오지 못했어요: ${esc(evErr)}</div>` : ''}
       <div class="pbox calbox">${grid}</div>
       <div class="pbox agenda">
         <div class="ahead"><b>${sel.getMonth() + 1}월 ${sel.getDate()}일 (${W7[sel.getDay()]})</b>
@@ -541,17 +570,17 @@
       if (a === 'prev') S.calMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1);
       if (a === 'next') S.calMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1);
       if (a === 'today') { const n = new Date(); S.calMonth = new Date(n.getFullYear(), n.getMonth(), 1); S.calSel = today(); }
-      if (a === 'reload') { S.evCache.clear(); }
+      if (a === 'reload') { S.evCache.clear(); S.evFail.clear(); S.evErr = ''; S.evLoading = null; }
       if (a === 'add') {
         const t = await createTask({ due_date: S.calSel }, false);
         if (t) { S.tab = 'todo'; render(); focusField('task', t.id, 'title'); toast(`${C.mmdd(S.calSel)} 마감 작업을 만들었어요. 내용을 입력하세요`); }
         return;
       }
-      return renderCal();
+      return safeRenderCal();
     }
     const open = e.target.closest('[data-open]');
     const day = e.target.closest('[data-d]');
-    if (day) { S.calSel = day.dataset.d; renderCal(); }
+    if (day) { S.calSel = day.dataset.d; safeRenderCal(); }
     if (open && (!day || e.target.closest('.ci'))) openDetail(open.dataset.open);
   }
 
@@ -814,7 +843,7 @@
     tv.addEventListener('focusout', onFocusOut);
 
     $('#cal-view').addEventListener('click', onCalClick);
-    let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.tab === 'cal') renderCal(); }, 200); });
+    let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.tab === 'cal') safeRenderCal(); }, 200); });
     $('#done-view').addEventListener('click', async e => {
       const b = e.target.closest('[data-act]'); if (!b) return;
       const id = b.closest('.drow')?.dataset.id;
