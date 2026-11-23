@@ -25,6 +25,8 @@
     showRoutineDone: LS.get('todo.showRoutineDone', false),
     lastCat: LS.get('todo.lastCat', '제안/협의'),
     lastCreatedId: null, loadedAt: 0, sortables: [],
+    calMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1), calSel: null,
+    evCache: new Map(), evLoading: null, evErr: '',
   };
   const pending = new Map();   // 삭제 대기(되돌리기용)
 
@@ -304,11 +306,12 @@
     $$('[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
     $('#todo-view').hidden = S.tab !== 'todo';
     $('#done-view').hidden = S.tab !== 'done';
+    $('#cal-view').hidden = S.tab !== 'cal';
     $('#viewbtns').style.display = S.tab === 'todo' ? '' : 'none';
     $('#routine-toggle').style.display = S.tab === 'done' ? '' : 'none';
     $$('[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === S.view));
     renderDatalists();
-    if (S.tab === 'todo') renderTodo(); else renderDone();
+    if (S.tab === 'todo') renderTodo(); else if (S.tab === 'cal') renderCal(); else renderDone();
     renderStats();
     restoreFocus(fc);
   }
@@ -403,6 +406,153 @@
     $('#dl-projects').innerHTML = projects.map(p => `<option value="${esc(p)}">`).join('');
     const sel = $('#f-project'), cur = S.project;
     sel.innerHTML = '<option value="">전체 프로젝트</option>' + [...projects].sort((a, b) => a.localeCompare(b, 'ko')).map(p => `<option${p === cur ? ' selected' : ''}>${esc(p)}</option>`).join('');
+  }
+
+
+  /* =================== 달력 =================== */
+  const W7 = '일월화수목금토';
+  const hhmm = d => `${C.pad(d.getHours())}:${C.pad(d.getMinutes())}`;
+  const inSpan = (d, a, b) => d >= a && d <= b;
+
+  async function ensureEvents(from, to, force = false) {
+    const key = `${from}_${to}`;
+    if (!force && S.evCache.has(key)) return;
+    if (S.evLoading === key) return;
+    S.evLoading = key; S.evErr = '';
+    let res;
+    try { res = await sb.functions.invoke('team-calendar', { body: { from, to } }); }
+    catch (e) { res = { error: e }; }
+    S.evLoading = null;
+    if (res.error) {
+      let msg = res.error.message || String(res.error);
+      try { const b = await res.error.context?.json(); if (b?.error) msg = b.error; } catch { /* noop */ }
+      S.evErr = msg;
+    } else S.evCache.set(key, (res.data && res.data.events) || []);
+    if (S.tab === 'cal') renderCal();
+  }
+
+  /* 하루에 걸리는 항목 모으기: 팀 일정 + 할 일(메인·하위, 기간이면 기간 내내) */
+  function calItems(from, to) {
+    const map = {};
+    const add = (d, it) => { (map[d] = map[d] || []).push(it); };
+    const eachDay = (a, b, fn) => { for (let d = C.parseYmd(a); C.ymd(d) <= b; d = C.addDays(d, 1)) { const y = C.ymd(d); if (y >= from && y <= to) fn(y); } };
+    const evs = S.evCache.get(`${from}_${to}`) || [];
+    for (const e of evs) {
+      if (e.allDay) eachDay(e.start, C.ymd(C.addDays(C.parseYmd(e.end), -1)), d => add(d, { type: 'ev', allDay: true, e, sort: '00:00' }));
+      else {
+        const s = new Date(e.start), en = new Date(new Date(e.end).getTime() - 1);
+        eachDay(C.ymd(s), C.ymd(en < s ? s : en), d => add(d, { type: 'ev', allDay: false, e, sort: d === C.ymd(s) ? hhmm(s) : '00:01', time: d === C.ymd(s) ? hhmm(s) : '' }));
+      }
+    }
+    const okTask = t => (!S.project || t.project === S.project) && textMatch(t);
+    for (const t of S.tasks) {
+      if (!t.due_date || !okTask(t)) continue;
+      eachDay(t.start_date || t.due_date, t.due_date, d => add(d, { type: 'task', t, sort: '99' + (t.done ? 1 : 0) }));
+    }
+    for (const sub of S.subs) {
+      const t = taskById(sub.task_id);
+      if (!sub.due_date || !t || !okTask(t)) continue;
+      eachDay(sub.start_date || sub.due_date, sub.due_date, d => add(d, { type: 'sub', s: sub, t, sort: '99' + (sub.done ? 1 : 0) }));
+    }
+    Object.values(map).forEach(a => a.sort((x, y) => x.sort.localeCompare(y.sort)));
+    return map;
+  }
+
+  function itemLine(it, td) {
+    if (it.type === 'ev') {
+      return `<div class="ci ev${it.allDay ? ' allday' : ''}" title="${esc(it.e.title)}${it.e.location ? ' · ' + esc(it.e.location) : ''}">${it.time ? `<span class="tm">${it.time}</span>` : ''}${esc(it.e.title)}</div>`;
+    }
+    const o = it.type === 'task' ? it.t : it.s;
+    const name = it.type === 'task' ? C.taskName(it.t) : `↳ ${it.s.title || ''}`;
+    const cls = `ci td cat-${catKey(it.t.category)}${o.done ? ' done' : ''}${C.isOverdue(o, td) ? ' over' : ''}`;
+    return `<div class="${cls}" data-open="${it.t.id}" title="${esc(name)}"><span class="dot"></span>${esc(name)}</div>`;
+  }
+
+  function renderCal() {
+    const td = today();
+    const m = S.calMonth, y = m.getFullYear(), mo = m.getMonth();
+    const gStart = C.startOfWeek(new Date(y, mo, 1));
+    const gEnd = C.addDays(C.startOfWeek(new Date(y, mo + 1, 0)), 6);
+    const from = C.ymd(gStart), to = C.ymd(gEnd);
+    ensureEvents(from, to);
+    if (!S.calSel || S.calSel < from || S.calSel > to) S.calSel = (td >= from && td <= to) ? td : C.ymd(new Date(y, mo, 1));
+    const map = calItems(from, to);
+    const mobile = window.matchMedia('(max-width:760px)').matches;
+    const MAX = 4;
+
+    let grid = '<div class="cgrid"><div class="cwk head"></div>' + [1, 2, 3, 4, 5, 6, 0].map(i => `<div class="chd${i === 0 ? ' sun' : i === 6 ? ' sat' : ''}">${W7[i]}</div>`).join('');
+    for (let wk = gStart; C.ymd(wk) <= to; wk = C.addDays(wk, 7)) {
+      const wi = C.weekInfo(wk);
+      grid += `<div class="cwk">${wi.month}월<br>${wi.week}주</div>`;
+      for (let i = 0; i < 7; i++) {
+        const d = C.addDays(wk, i), dy = C.ymd(d), items = map[dy] || [];
+        const cls = ['cday', d.getMonth() !== mo ? 'other' : '', dy === td ? 'today' : '', dy === S.calSel ? 'sel' : '', i >= 5 ? 'wkend' : ''].join(' ');
+        const body = mobile
+          ? `<div class="cdots">${items.slice(0, 6).map(it => `<i class="${it.type === 'ev' ? 'ev' : 'td cat-' + catKey(it.t.category)}"></i>`).join('')}</div>`
+          : items.slice(0, MAX).map(it => itemLine(it, td)).join('') + (items.length > MAX ? `<div class="cmore">+${items.length - MAX}개 더보기</div>` : '');
+        grid += `<div class="${cls}" data-d="${dy}"><div class="cnum">${d.getDate()}</div>${body}</div>`;
+      }
+    }
+    grid += '</div>';
+
+    // 선택한 날 상세
+    const sel = C.parseYmd(S.calSel), items = map[S.calSel] || [];
+    const evs = items.filter(i => i.type === 'ev'), tds = items.filter(i => i.type !== 'ev');
+    const evHTML = evs.length ? evs.map(it => {
+      const e = it.e;
+      const time = e.allDay ? '종일' : `${hhmm(new Date(e.start))} – ${hhmm(new Date(e.end))}`;
+      return `<div class="arow ev"><span class="atime">${time}</span><span class="atitle">${esc(e.title)}</span><span class="aloc">${esc(e.location)}</span></div>`;
+    }).join('') : `<div class="aempty">${S.evErr ? '' : (S.evLoading ? '불러오는 중…' : '팀 일정 없음')}</div>`;
+    const tdHTML = tds.length ? tds.map(it => {
+      const o = it.type === 'task' ? it.t : it.s;
+      const name = it.type === 'task' ? (it.t.title || '') : `↳ ${it.s.title || ''}`;
+      return `<div class="arow td${o.done ? ' done' : ''}${C.isOverdue(o, td) ? ' over' : ''}" data-open="${it.t.id}">
+        <button class="chk${o.done ? ' on' : ''}" data-cal-toggle="${it.type}:${o.id}" aria-label="완료"></button>
+        <span class="chip c-${catKey(it.t.category)}">${esc(it.t.category)}</span>
+        <span class="aproj">${esc(it.t.project)}</span><span class="atitle">${esc(name)}</span>
+        <span class="aloc">${esc(C.dateCellText(o.start_date, o.due_date))}</span></div>`;
+    }).join('') : '<div class="aempty">마감인 할 일 없음</div>';
+
+    $('#cal-view').innerHTML = `
+      <div class="calbar">
+        <button class="pbtn small" data-cal="prev" title="이전 달">◀</button>
+        <h2>${y}년 ${mo + 1}월</h2>
+        <button class="pbtn small" data-cal="next" title="다음 달">▶</button>
+        <button class="pbtn small" data-cal="today">오늘</button>
+        <button class="pbtn small" data-cal="reload" title="팀 일정 다시 불러오기">${S.evLoading ? '불러오는 중…' : '새로고침'}</button>
+        <span class="legend"><i class="ev"></i>팀 일정 <i class="td"></i>할 일 마감 <i class="ov"></i>지연</span>
+      </div>
+      ${S.evErr ? `<div class="calerr">팀 일정을 불러오지 못했어요: ${esc(S.evErr)}</div>` : ''}
+      <div class="pbox calbox">${grid}</div>
+      <div class="pbox agenda">
+        <div class="ahead"><b>${sel.getMonth() + 1}월 ${sel.getDate()}일 (${W7[sel.getDay()]})</b>
+          <button class="pbtn small" data-cal="add">＋ 이 날 마감으로 할 일 추가</button></div>
+        <div class="asec">팀 일정</div>${evHTML}
+        <div class="asec">할 일 마감</div>${tdHTML}
+      </div>`;
+  }
+
+  async function onCalClick(e) {
+    const tg = e.target.closest('[data-cal-toggle]');
+    if (tg) { e.stopPropagation(); const [k, id] = tg.dataset.calToggle.split(':'); return k === 'task' ? toggleTask(id) : toggleSub(id); }
+    const btn = e.target.closest('[data-cal]');
+    if (btn) {
+      const a = btn.dataset.cal, m = S.calMonth;
+      if (a === 'prev') S.calMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1);
+      if (a === 'next') S.calMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+      if (a === 'today') { const n = new Date(); S.calMonth = new Date(n.getFullYear(), n.getMonth(), 1); S.calSel = today(); }
+      if (a === 'reload') { S.evCache.clear(); }
+      if (a === 'add') {
+        const t = await createTask({ due_date: S.calSel }, false);
+        if (t) { S.tab = 'todo'; render(); focusField('task', t.id, 'title'); toast(`${C.mmdd(S.calSel)} 마감 작업을 만들었어요. 내용을 입력하세요`); }
+        return;
+      }
+      return renderCal();
+    }
+    const open = e.target.closest('[data-open]');
+    const day = e.target.closest('[data-d]');
+    if (day) { S.calSel = day.dataset.d; renderCal(); }
+    if (open && (!day || e.target.closest('.ci'))) openDetail(open.dataset.open);
   }
 
   /* =================== 셀 편집 =================== */
@@ -663,6 +813,8 @@
     tv.addEventListener('focusin', onFocusIn);
     tv.addEventListener('focusout', onFocusOut);
 
+    $('#cal-view').addEventListener('click', onCalClick);
+    let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.tab === 'cal') renderCal(); }, 200); });
     $('#done-view').addEventListener('click', async e => {
       const b = e.target.closest('[data-act]'); if (!b) return;
       const id = b.closest('.drow')?.dataset.id;
